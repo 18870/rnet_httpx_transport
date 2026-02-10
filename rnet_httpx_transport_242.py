@@ -1,9 +1,7 @@
-from datetime import timedelta
-from typing import AsyncIterator, Unpack
+from typing import AsyncIterator
 
 import httpx
 import rnet
-import rnet.exceptions
 
 
 class RnetAsyncByteStream(httpx.AsyncByteStream):
@@ -12,7 +10,7 @@ class RnetAsyncByteStream(httpx.AsyncByteStream):
         self.streamer = response.stream()
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        async for chunk in self.streamer: # type: ignore
+        async for chunk in self.streamer:
             yield chunk
 
     async def aclose(self) -> None:
@@ -22,10 +20,22 @@ class RnetAsyncByteStream(httpx.AsyncByteStream):
 class RnetAsyncTransport(httpx.AsyncBaseTransport):
     def __init__(
         self,
-        **kwargs : Unpack["rnet.ClientConfig"],
+        impersonate: rnet.Impersonate | rnet.ImpersonateOption | None = None,
+        proxies: str | list[rnet.Proxy] | None = None,
+        **kwargs,
     ) -> None:
-        kwargs.setdefault("cookie_store", False)
+        """
+        See rnet.Client for available kwargs
+        """
+
+        if isinstance(proxies, str):
+            proxies = [rnet.Proxy.all(proxies)]
+
         self.client = rnet.Client(
+            impersonate=impersonate,
+            allow_redirects=False,
+            cookie_store=False,
+            proxies=proxies,
             **kwargs,
         )
 
@@ -48,25 +58,23 @@ class RnetAsyncTransport(httpx.AsyncBaseTransport):
         }
 
         timeouts = request.extensions.get("timeout", {})
-        request_params["timeout"] = timedelta(seconds=timeouts.get("pool"))
-        request_params["read_timeout"] = timedelta(seconds=timeouts.get("read"))
+        request_params["timeout"] = timeouts.get("pool")
+        request_params["read_timeout"] = timeouts.get("read")
 
         try:
             resp = await self.client.request(**request_params)
         except (
-            rnet.exceptions.RustPanic,
-            rnet.exceptions.TlsError,
+            rnet.exceptions.DNSResolverError,
             rnet.exceptions.BodyError,
             rnet.exceptions.BuilderError,
             rnet.exceptions.RedirectError,
             rnet.exceptions.RequestError,
             rnet.exceptions.UpgradeError,
+            rnet.exceptions.MIMEParseError,
             rnet.exceptions.StatusError,
-            rnet.exceptions.WebSocketError,
         ) as e:
             raise httpx.RequestError(message=str(e.args), request=request) from e
         except (
-            rnet.exceptions.ProxyConnectionError,
             rnet.exceptions.ConnectionError,
             rnet.exceptions.ConnectionResetError,
         ) as e:
@@ -75,9 +83,11 @@ class RnetAsyncTransport(httpx.AsyncBaseTransport):
             raise httpx.DecodingError(message=str(e.args), request=request) from e
         except rnet.exceptions.TimeoutError as e:
             raise httpx.TimeoutException(message=str(e.args), request=request) from e
+        except rnet.exceptions.URLParseError as e:
+            raise httpx.InvalidURL(message=str(e.args)) from e
 
         return httpx.Response(
-            status_code=resp.status.as_int(),
+            status_code=resp.status,
             headers=httpx.Headers(resp.headers), # type: ignore
             stream=RnetAsyncByteStream(resp),
             request=request,

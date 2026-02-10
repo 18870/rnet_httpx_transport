@@ -3,7 +3,7 @@ import asyncio
 import rnet
 from httpx import AsyncClient, Timeout
 
-from rnet_httpx_transport import RnetAsyncTransport
+from rnet_httpx_transport_242 import RnetAsyncTransport
 
 
 async def main():
